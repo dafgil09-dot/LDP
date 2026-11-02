@@ -1280,7 +1280,7 @@
         display: block;
         margin-top: 3px;
       }
-/* ---------- Dashboard: Talent Pool per Program (screenshot layout) ---------- */
+/* ---------- Dashboard: Ringkasan Program (screenshot layout) ---------- */
   .talent-program-stack { display:grid; grid-template-columns:1fr; gap:28px; }
   .talent-program-card {
     background:#fff; border:1px solid #e6ebf2; border-top:6px solid #111827;
@@ -1295,8 +1295,13 @@
     padding:12px 20px; font-size:15px; font-weight:750; cursor:pointer;
   }
   .talent-program-open:hover { background:#f7f9fd; border-color:#c6d1e0; }
-  .talent-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }
+  .talent-metrics { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:14px; }
   .talent-metric { border:1px solid #dfe5ee; border-radius:17px; padding:18px 18px 16px; min-height:128px; background:#fff; }
+  .talent-metric-link { appearance:none; text-align:left; font:inherit; cursor:pointer; }
+  .talent-metric-link:hover { border-color:#a8bfdc; background:#f7faff; }
+  .talent-metric-link:focus-visible { outline:3px solid #2563eb; outline-offset:3px; }
+  .talent-track-note { margin:12px 0 0; color:var(--muted); font-size:12px; }
+  @media (min-width:1101px) and (max-width:1350px) { .talent-metrics { grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; } .talent-metric { padding:16px 12px; } }
   .talent-metric-label { color:#9aa6ba; font-size:13px; font-weight:800; letter-spacing:.015em; text-transform:uppercase; }
   .talent-metric-value { margin-top:8px; color:#07152e; font-size:38px; line-height:1; font-weight:850; }
   .talent-metric-value.green { color:#08a64c; }
@@ -1401,6 +1406,7 @@
         .program-progress-filters,.program-progress-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
       }
       @media(max-width:420px) { .program-progress-filters { grid-template-columns:1fr; } }
+      .segment-picker{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;max-width:880px}.segment-card{padding:28px}.segment-card h2{font-size:30px;margin:16px 0 8px}.segment-card p{color:var(--muted);margin-bottom:24px}@media(max-width:640px){.segment-picker{grid-template-columns:1fr}.segment-card{padding:22px}}
     </style>
   </head>
   <body>
@@ -1536,6 +1542,7 @@
       const $ = (id) => document.getElementById(id);
       const S = {
         token: null,
+        segment: "B2B",
         session: null,
         dashboard: null,
         view: "overview",
@@ -1563,9 +1570,10 @@
         "PANELISASI",
         "COMPLETED",
       ];
-      const STATUSES = ["ELIGIBLE", "NOT ELIGIBLE", "PROMOSI", "RESIGN"];
+      const STATUSES = ["ELIGIBLE", "NOT ELIGIBLE", "PROMOSI", "RESIGN", "BYPASS"];
       const RESULTS = ["ON GOING", "PASSED", "REMEDIAL", "NOT PASSED"];
       const LABELS = {
+        segments: "Pilih Segmen",
         overview: "Overview",
         programprogress: "Progress Program",
         progress: "Progres Belajar",
@@ -1701,11 +1709,44 @@
         e.stale = true;
         return e;
       }
+      function segmentPrograms_(segment=S.segment) {
+        return segment==="B2C" ? ["SLDP","TSHDP"] : ["ASHDP","TSHDP"];
+      }
+      function renderSegments_() {
+        const available=S.dashboard?.availableSegments || ["B2B","B2C"];
+        content(pageHead("Leadership Development Program","Pilih segmen untuk membuka dashboard dan data program.")+
+          '<div class="segment-picker">'+["B2B","B2C"].map(segment=>{
+            const allowed=available.includes(segment);
+            return '<section class="card segment-card"><span class="program-tag">'+segment+'</span><h2>'+segment+'</h2><p>'+segmentPrograms_(segment).join(' · ')+'</p>'+button(allowed?'Buka dashboard':'Belum terdaftar','select-segment','data-segment="'+segment+'" '+(allowed?'':'disabled'),'primary')+'</section>';
+          }).join('')+'</div>');
+      }
+      async function switchSegment_(segment,view="overview") {
+        if(!["B2B","B2C"].includes(segment)) throw Error("Segmen tidak valid.");
+        if(!(S.dashboard?.availableSegments || ["B2B","B2C"]).includes(segment)) throw Error("Anda belum terdaftar pada segmen ini.");
+        if(rawImportState.running || oneClickSync_.running || dashboardSheetSync_.running || legacyMigrationState.running)
+          return toast("Tunggu proses penyimpanan selesai sebelum mengganti segmen.",true);
+        S.epoch++;S.readGeneration++;S.nav++;S.segment=segment;
+        S.cache.clear();clearRetainedViews_();S.inflight.clear();S.viewRefreshes.clear();S.backgroundReadKeys.clear();
+        S.queue.splice(0).forEach(job=>job.reject(staleError()));S.selected.clear();S.enrollmentId="";S.rows=[];S.pageData=null;S.workspace=null;
+        S.auditBefore=null;S.auditStack=[];S.certImportBatch="";closeModal();
+        Object.assign(listState,{page:1,search:"",program:"",region:"",batch:"",status:"",phase:"",track:""});
+        Object.assign(certPage,{page:1,search:""});Object.assign(qleapPage,{page:1,search:"",onlyRemedial:false});
+        Object.assign(rawImportState,{epoch:-1,options:null,preview:null,job:null,running:false,selected:null});
+        Object.assign(moduleLinkState,{epoch:-1,options:null,program:"TSHDP",phase:"PHASE 1",drafts:{}});
+        Object.assign(rawBundle_,{epoch:-1,files:[],running:false});Object.assign(oneClickSync_,{epoch:-1,run:null,running:false});
+        Object.assign(dashboardSheetSync_,{epoch:-1,progress:null,running:false});Object.assign(legacyMigrationState,{epoch:-1,preview:null,job:null,running:false});
+        S.view="segments";content(pageHead("Dashboard "+segment,"")+loading());
+        const epoch=S.epoch,d=await resource("getDashboardBootstrap",[],30000,true);
+        if(epoch!==S.epoch)return;
+        if(d.segment!==segment)throw Error("Backend belum mendukung segmen. Ganti Code.gs dan deploy versi terbaru sebelum melanjutkan.");
+        applyDashboard_(d);await navigate(view,{},false);
+      }
       function resetSession() {
         S.epoch++;
         S.readGeneration++;
         S.nav++;
         S.token = null;
+        S.segment = "B2B";
         S.session = null;
         S.dashboard = null;
         S.cache.clear();
@@ -1759,7 +1800,9 @@
           key=S.epoch+"|"+S.readGeneration+"|"+name+"|"+JSON.stringify(args);
         if(read && S.inflight.has(key)) return S.inflight.get(key);
         const promise=new Promise((resolve,reject)=>{
-          S.queue.push({name,args,read,resolve,reject,epoch:S.epoch,queuedAt:Date.now(),
+          const explicit=args.find(arg=>arg && typeof arg==="object" && !Array.isArray(arg) && arg.segment),
+            segment=["login","getLoginConfig","switchRole"].includes(name) ? "ALL" : explicit?.segment || S.segment;
+          S.queue.push({name,args:[...args,{__ldpContext:1,segment}],read,resolve,reject,epoch:S.epoch,queuedAt:Date.now(),
             background:S.backgroundReadKeys.has(key) || ["getParticipantDashboardData","getOverviewStats"].includes(name)});
           pump();
         });
@@ -1925,6 +1968,7 @@
         return {
           nik: e.nik || S.dashboard.participant.nik,
           enrollmentId: e.enrollmentId,
+          segment: e.segment || S.segment,
           program: e.program,
           batch: e.batch,
           recordVersion: e.recordVersion,
@@ -2120,9 +2164,11 @@
             });
       }
       function menus() {
+        if(S.segment==="ALL") return [["segments","Pilih Segmen","home"]];
         const role = S.dashboard.session.role;
         if (role === "PARTICIPANT")
           return [
+            ["segments", "Pilih Segmen", "home"],
             ["overview", "Overview", "home"],
             ["progress", "Progres Belajar", "book"],
             ["project", "Project", "folder"],
@@ -2131,7 +2177,8 @@
             ["qleap", "Hasil QLEAP", "list"],
           ];
         let list = [
-          ["overview", "Overview", "home"],
+          ["segments", "Pilih Segmen", "home"],
+            ["overview", "Overview", "home"],
           ["programprogress", "Progress Program", "list"],
           ["database", "Database Peserta", "people"],
         ];
@@ -2155,7 +2202,7 @@
         const u = S.dashboard.session;
         $("userName").textContent = u.name;
         $("userRole").textContent =
-          ROLE_LABELS[u.role] + (u.region ? " · " + u.region : "");
+          ROLE_LABELS[u.role] + (u.region ? " · " + u.region : "") + (S.segment!=="ALL"?" · "+S.segment:"");
         $("avatar").textContent = String(u.name || "U")
           .split(/\s+/)
           .slice(0, 2)
@@ -2180,6 +2227,7 @@
       // No persistent browser storage: personal data stays in this signed-in tab.
       const dashboardWork = {epoch:-1,promise:null,at:0,generation:0,error:"",force:false};
       function applyDashboard_(d) {
+        if(d.segment) S.segment=d.segment;
         S.dashboard=d; S.session=d.session;
         renderShell(); $("app").hidden=false; $("loginPage").hidden=true;
         $("syncLabel").textContent=d.detailsPending ? "Memuat ringkasan…" :
@@ -2284,6 +2332,7 @@
         retainedViews.pages.set(p.key,p);
       }
       function clearRetainedViews_() {
+        stopCertificateRefresh_();
         if(retainedViews.pages.size) {
           const host=$('content');if(host && host.replaceChildren) host.replaceChildren();
         }
@@ -2421,6 +2470,7 @@
             selectionLabel();
           }
           if(p.edited && p.dirty) $('syncLabel').textContent='Data berubah · input yang belum disimpan tetap tersimpan';
+          if(view==='certificates') scheduleCertificateRefresh_(p.nav,{rows:S.rows});
           refreshRetainedView_(p);trimRetainedViews_();return;
         }
         if(p.pending && !force && !p.dirty) return p.pending;
@@ -2443,8 +2493,10 @@
       }
 
       async function navigate(view, params = {}, force = false) {
+        if(S.segment==="ALL" && view!=="segments") view="segments";
         // Older links use the same Database root, state and request cache.
         if(view === "control") view = "database";
+        if(view !== "certificates") stopCertificateRefresh_();
         if(view === "database" && params.program) {
           if(params.program !== listState.program) {
             listState.program=params.program;listState.batch="";listState.page=1;S.selected.clear();
@@ -2636,16 +2688,16 @@
           return;
         }
         if(d.programStatsPending) {
-          content('<h1 style="font-size:24px;color:#07152e;margin-bottom:22px;">Talent Pool per Program</h1>'+dashboardNotice_()+
-            '<div class="talent-program-stack">'+['ASHDP','TSHDP'].map(program=>
+          content('<h1 style="font-size:24px;color:#07152e;margin-bottom:22px;">Ringkasan Program</h1>'+dashboardNotice_()+
+            '<div class="talent-program-stack">'+segmentPrograms_().map(program=>
               '<section class="talent-program-card '+(program==='TSHDP'?'tshdp':'')+'"><div class="talent-program-name">'+program+
               '</div>'+(dashboardWork.error ? '<p class="muted">Ringkasan belum tersedia. Gunakan Coba lagi di atas.</p>'
                 : '<p class="muted">Memuat ringkasan program…</p>'+loading())+'</section>').join('')+'</div>');
           startDashboardHydration_();return;
         }
-        const stats = (d.programStats || []).filter((g) => ["ASHDP", "TSHDP"].includes(g.program));
+        const stats = (d.programStats || []).filter((g) => segmentPrograms_().includes(g.program));
         content(
-          '<h1 style="font-size:24px;color:#07152e;margin-bottom:22px;">Talent Pool per Program</h1>' +
+          '<h1 style="font-size:24px;color:#07152e;margin-bottom:22px;">Ringkasan Program</h1>' +
           dashboardNotice_() + '<div class="talent-program-stack">' + stats.map(finalProgramPanel_).join("") + '</div>',
         );
         startDashboardHydration_();
@@ -2675,9 +2727,11 @@
 
     var metrics =
       '<div class="talent-metrics">' +
-        '<div class="talent-metric"><div class="talent-metric-label">Talent Pool</div><div class="talent-metric-value">' + Number(g.talentPool || 0) + '</div><div class="talent-metric-sub">Lulus &amp; belum promosi</div></div>' +
+        '<button type="button" class="talent-metric talent-metric-link" data-action="program-filter" data-program="' + esc(g.program) + '" data-track="TALENT" aria-label="Lihat peserta Talent ' + esc(g.program) + '"><div class="talent-metric-label">Talent Pool</div><div class="talent-metric-value">' + Number(g.talentPool || 0) + '</div><div class="talent-metric-sub">Peserta berlabel Talent</div></button>' +
+        '<button type="button" class="talent-metric talent-metric-link" data-action="program-filter" data-program="' + esc(g.program) + '" data-track="STANDARDISASI" aria-label="Lihat peserta Standarisasi ' + esc(g.program) + '"><div class="talent-metric-label">Standarisasi</div><div class="talent-metric-value">' + Number(g.standarisasi || 0) + '</div><div class="talent-metric-sub">Peserta berlabel Standarisasi</div></button>' +
         '<div class="talent-metric"><div class="talent-metric-label">Promosi</div><div class="talent-metric-value green">' + Number(g.promoted || 0) + '</div><div class="talent-metric-sub">' + (total ? Math.round(Number(g.promoted || 0) / total * 100) : 0) + '% dari total</div></div>' +
         '<div class="talent-metric"><div class="talent-metric-label">Resign</div><div class="talent-metric-value red">' + Number(g.resigned || 0) + '</div><div class="talent-metric-sub">' + (total ? Math.round(Number(g.resigned || 0) / total * 100) : 0) + '% dari total</div></div>' +
+        '<button type="button" class="talent-metric talent-metric-link" data-action="program-filter" data-program="' + esc(g.program) + '" data-status="BYPASS" aria-label="Lihat peserta Bypass ' + esc(g.program) + '"><div class="talent-metric-label">Bypass</div><div class="talent-metric-value blue">' + Number(g.bypassed || 0) + '</div><div class="talent-metric-sub">Status peserta</div></button>' +
         '<div class="talent-metric"><div class="talent-metric-label">On Going</div><div class="talent-metric-value blue">' + onGoing + '</div><div class="talent-metric-sub">' + Number(g.eligiblePanel || 0) + ' eligible panel</div></div>' +
       '</div>';
 
@@ -2700,7 +2754,10 @@
         '<div class="talent-program-meta">' + total + ' peserta &nbsp;&middot;&nbsp; ' + regionCount + ' region</div></div>' +
         '<button class="talent-program-open" data-action="program-filter" data-program="' + esc(g.program) + '" data-region="">Lihat Peserta</button>' +
       '</div>' +
-      metrics + progress +
+      metrics +
+      (Number(g.bothTracks || 0) ? '<p class="talent-track-note">' + Number(g.bothTracks) + ' peserta berlabel Keduanya tercatat di Talent Pool dan Standarisasi.</p>' : '') +
+      (Number(g.unassignedTrack || 0) ? '<p class="talent-track-note">' + Number(g.unassignedTrack) + ' peserta belum ditetapkan jalurnya. ' + button('Lihat peserta','program-filter','data-program="'+esc(g.program)+'" data-track="UNASSIGNED"','small') + '</p>' : '') +
+      progress +
       '<div class="talent-region-wrap"><div class="talent-region-title">Region</div><div class="talent-region-list">' +
       (regions || '<span style="color:var(--muted);font-size:13px;">Belum ada data region.</span>') +
       '</div></div></div>';
@@ -2714,7 +2771,7 @@
           programProgressState.epoch=S.epoch;
           programProgressState.programs={};
         }
-        for(const p of ["ASHDP","TSHDP"])
+        for(const p of segmentPrograms_())
           if(!programProgressState.programs[p]) programProgressState.programs[p]={batch:"",batchStatus:"",region:"",progressStatus:"",search:"",page:1};
         return programProgressState.programs;
       }
@@ -2742,9 +2799,9 @@
         if(!["ADMIN","CLP","SUPERIOR"].includes(S.dashboard.session.role))
           throw new Error("Panel ini hanya tersedia untuk pengelola program.");
         progressFilters_();
-        content(pageHead('Progress Program','Pantau angkatan berjalan dan riwayat peserta ASHDP serta TSHDP.')+
+        content(pageHead('Progress Program','Pantau angkatan berjalan dan riwayat peserta pada segmen aktif.')+
           '<div class="notice">Complete mengikuti phase COMPLETED atau hasil akhir program yang sudah lengkap. Status kelulusan dan status peserta tetap ditampilkan terpisah. Status batch mengikuti peserta yang tercatat dalam akses Anda.</div>'+
-          '<div class="program-progress-stack">'+["ASHDP","TSHDP"].map(p=>'<section class="card program-progress-panel '+p.toLowerCase()+'" id="pp_'+p+'">'+loading()+'</section>').join('')+'</div>');
+          '<div class="program-progress-stack">'+segmentPrograms_().map(p=>'<section class="card program-progress-panel '+p.toLowerCase()+'" id="pp_'+p+'">'+loading()+'</section>').join('')+'</div>');
         await loadProgramProgress_(nav,force);
       }
       async function loadProgramProgress_(nav, force=false) {
@@ -2754,11 +2811,11 @@
         const d=await viewResource_('getProgramProgress',[{programs}],30000,force);
         if(!alive(nav) || S.view!=='programprogress' || sequence!==(owner ? owner.progressSequence : programProgressState.sequence)) return;
         const active=document.activeElement,
-          focus=active && /^pp_(ASHDP|TSHDP)_/.test(active.id || '') ?
+          focus=active && /^pp_(ASHDP|TSHDP|SLDP)_/.test(active.id || '') ?
             {id:active.id,start:active.selectionStart,end:active.selectionEnd} : null;
         for(const panel of d.programs || []) {
           const p=panel.program;
-          if(!["ASHDP","TSHDP"].includes(p)) continue;
+          if(!segmentPrograms_().includes(p)) continue;
           const f=progressFilters_()[p]; f.page=panel.page;
           $('pp_'+p).innerHTML=programProgressPanel_(panel);
           for(const key of ['batchStatus','batch','region','progressStatus']) {
@@ -2789,7 +2846,7 @@
         }
       }
       function filterProgress_(program, status, page) {
-        if(!["ASHDP","TSHDP"].includes(program)) return;
+        if(!segmentPrograms_().includes(program)) return;
         const f=progressFilters_()[program];
         if(status!==undefined) { f.progressStatus=status; f.page=1; }
         if(page!==undefined) f.page=Math.max(1,Number(page)||1);
@@ -2914,6 +2971,7 @@
         batch: "",
         status: "",
         phase: "",
+        track: "",
       };
       let listSequence = 0;
       async function renderDatabase(nav, params, force) {
@@ -2939,9 +2997,9 @@
           ) +
             '<div class="filters"><input id="dbSearch" aria-label="Cari peserta" placeholder="Cari nama atau NIK…" value="' +
             esc(listState.search) +
-            '"><select id="dbProgram" aria-label="Program"><option value="">Semua program</option><option>ASHDP</option><option>TSHDP</option></select><select id="dbRegion" aria-label="Region"><option value="">Semua region</option></select><select id="dbBatch" aria-label="Batch"><option value="">Semua batch</option></select><select id="dbStatus" aria-label="Status peserta"><option value="">Semua status</option>' +
+            '"><select id="dbSegment" aria-label="Segmen"><option>B2B</option><option>B2C</option></select><select id="dbProgram" aria-label="Program"><option value="">Semua program</option>' + segmentPrograms_().map(p=>'<option>'+esc(p)+'</option>').join('') + '</select><select id="dbRegion" aria-label="Region"><option value="">Semua region</option></select><select id="dbBatch" aria-label="Batch"><option value="">Semua batch</option></select><select id="dbStatus" aria-label="Status peserta"><option value="">Semua status</option>' +
             STATUSES.map((x) => "<option>" + x + "</option>").join("") +
-            "</select></div>" +
+            '</select><select id="dbTrack" aria-label="Jalur program"><option value="">Semua jalur</option><option value="TALENT">Talent</option><option value="STANDARDISASI">Standarisasi</option><option value="BOTH">Keduanya</option><option value="UNASSIGNED">Belum ditetapkan</option></select></div>' +
             (admin
               ? '<div id="bulkBar" class="bulk-bar" hidden><span id="selectionLabel" role="status">0 peserta dipilih</span><div class="actions"><select id="bulkPhase" aria-label="Phase tujuan">' +
                 PHASES.map((x) => "<option>" + x + "</option>").join("") +
@@ -2955,7 +3013,10 @@
             "</div>",
         );
         $("dbProgram").value = listState.program;
+        $("dbSegment").value=S.segment;
+        $("dbSegment").addEventListener("change",()=>switchSegment_($("dbSegment").value,"database").catch(handleError));
         $("dbStatus").value = listState.status;
+        $("dbTrack").value = listState.track;
         let debounce;
         $("dbSearch").addEventListener("input", () => {
           clearTimeout(debounce);
@@ -2972,6 +3033,7 @@
           ["dbRegion", "region"],
           ["dbBatch", "batch"],
           ["dbStatus", "status"],
+          ["dbTrack", "track"],
         ].forEach(([id, key]) =>
           $(id).addEventListener("change", () => {
             if(!alive(nav)) return;
@@ -3028,6 +3090,7 @@
             "NIK",
             "Nama / Jabatan",
             "Program / Batch",
+            "Jalur",
             "Region",
             "Phase",
             "Status",
@@ -3056,7 +3119,8 @@
                 '<span class="muted">' +
                 esc(r.batch) +
                 "</span></td><td>" +
-                fmt(r.region) +
+                esc(({TALENT:"Talent",STANDARDISASI:"Standarisasi",BOTH:"Keduanya"})[r.programTrack] || r.programTrack || "Belum ditetapkan") +
+                "</td><td>" + fmt(r.region) +
                 "</td><td>" +
                 badge(r.currentPhase) +
                 "</td><td>" +
@@ -3134,6 +3198,7 @@
             ? r.program + " · " + r.batch
             : "Satu form untuk satu keikutsertaan program.",
           '<form id="participantForm"><div class="form-grid">' +
+            (existing ? field("Segmen","segment",r.segment || S.segment,"text","readonly") : select("Segmen","segment",["B2B","B2C"],S.segment)) +
             field(
               "NIK",
               "nik",
@@ -3148,7 +3213,7 @@
             field("Region", "region", r.region || "", "text", "required") +
             (existing
               ? field("Program", "program", r.program, "text", "readonly")
-              : select("Program", "program", ["TSHDP", "ASHDP"], "TSHDP")) +
+              : select("Program", "program", segmentPrograms_().slice().reverse(), "TSHDP")) +
             field(
               "Batch",
               "batch",
@@ -3169,13 +3234,13 @@
               r.currentPhase || "PHASE 1",
             ) +
             select(
-              "Program Track",
+              "Jalur program",
               "programTrack",
               [
                 { value: "", label: "Belum ditetapkan" },
-                "STANDARDISASI",
-                "TALENT",
-                "BOTH",
+                { value: "STANDARDISASI", label: "Standarisasi" },
+                { value: "TALENT", label: "Talent" },
+                { value: "BOTH", label: "Keduanya" },
               ],
               r.programTrack || "",
             ) +
@@ -3185,6 +3250,9 @@
             formActions() +
             "</form>",
         );
+        if(!existing) $("f_segment").addEventListener("change",()=>{
+          $("f_program").innerHTML=segmentPrograms_($("f_segment").value).map(p=>'<option>'+esc(p)+'</option>').join('');
+        });
         form("participantForm", async (data) => {
           await rpc("saveParticipantControl", S.token, {
             ...Object.fromEntries(data),
@@ -3198,6 +3266,7 @@
           ]);
           closeModal();
           toast("Data peserta tersimpan.");
+          if(data.get("segment")!==S.segment)return switchSegment_(data.get("segment"),"database");
           navigate(S.view, S.params, true);
         });
       }
@@ -3475,8 +3544,8 @@
                   (e.certificateUrl
                     ? "Sertifikat program Anda sudah tersedia."
                     : e.detailsPending ? "Memuat informasi sertifikat…" : e.result === "PASSED"
-                      ? "Sertifikat akan tersedia setelah diproses dan dipublikasikan oleh Admin."
-                      : "Sertifikat tersedia setelah program dinyatakan lulus dan dipublikasikan oleh Admin.") +
+                      ? "Sertifikat dari template akan otomatis tersedia setelah selesai diproses."
+                      : "Sertifikat dari template tersedia setelah peserta memenuhi syarat dan file selesai diproses.") +
                   "</p>" +
                   (e.certificateUrl
                     ? '<a class="btn primary" href="' +
@@ -3514,10 +3583,10 @@
             ? "Peserta harus sudah berstatus lulus pada program dan batch yang sesuai."
             : qleap
               ? "Gunakan file export QLEAP dengan header exam yang lengkap."
-              : "Isi NIK, Nama, Job Title, Region, Program, dan Batch. Maksimal 250 peserta per file.",
+              : "Isi NIK, Nama, Job Title, Region, Program, Batch, dan Segmen. Maksimal 250 peserta per file.",
           '<form id="importForm">' +
             (!cert && !qleap
-              ? '<p class="muted">Program mengikuti kolom CSV: ASHDP atau TSHDP. Peserta baru dimulai dari Phase 1 dengan status Eligible dan otomatis mendapat akun login NIK. Impor ulang mempertahankan fase, status, dan nilai yang sudah ada.</p>'
+              ? '<p class="muted">Program mengikuti segmen aktif. Isi kolom Segmen B2B atau B2C; template lama tanpa Segmen dibaca sebagai B2B. Peserta baru dimulai dari Phase 1 dengan status Eligible dan otomatis mendapat akun login NIK. Impor ulang mempertahankan fase, status, dan nilai yang sudah ada.</p>'
               : "") +
             '<div class="field"><label for="importFile">File CSV atau Excel</label><input id="importFile" class="file-input" name="file" type="file" accept=".csv,.xlsx,.xls" required><span class="field-help">Gunakan header sesuai template. File maksimal 20 MB.</span></div>' +
             (!qleap
@@ -3696,6 +3765,42 @@
         });
       }
       let certPage = { page: 1, pageSize: 30, search: "" };
+      const certificateRefresh_={timer:null,sequence:0};
+      function stopCertificateRefresh_() {
+        clearTimeout(certificateRefresh_.timer);
+        certificateRefresh_.timer=null;certificateRefresh_.sequence++;
+      }
+      function scheduleCertificateRefresh_(nav,data,delay=15000) {
+        stopCertificateRefresh_();
+        if(S.view!=="certificates" || !alive(nav) ||
+          !(data.rows || []).some(r=>["QUEUED","PROCESSING"].includes(r.jobStatus))) return;
+        const ticket=certificateRefresh_.sequence,epoch=S.epoch,generation=S.readGeneration,query={...certPage},
+          current=()=>ticket===certificateRefresh_.sequence && epoch===S.epoch && generation===S.readGeneration &&
+            S.view==="certificates" && alive(nav) && JSON.stringify(query)===JSON.stringify(certPage),
+          editing=()=>$('dialog').open || document.hidden ||
+            (document.activeElement && document.activeElement.id==="certSearch");
+        certificateRefresh_.timer=setTimeout(async()=>{
+          certificateRefresh_.timer=null;
+          if(!current()) return;
+          if(editing()) {scheduleCertificateRefresh_(nav,data,delay);return;}
+          try {
+            // Low-priority read only: never run or replay a certificate write here.
+            const key=epoch+'|'+generation+'|getCertificatesOverview|'+JSON.stringify([S.token,query]);
+            S.backgroundReadKeys.add(key);
+            const request=resource('getCertificatesOverview',[query],30000,true,{freshSource:false,retainedBackground:true});
+            S.backgroundReadKeys.delete(key);
+            const latest=await request;
+            if(!current()) return;
+            if((JSON.stringify(latest.rows)!==JSON.stringify(data.rows) || (data.total!==undefined && latest.total!==data.total)) && !editing()) {
+              await renderCurrentView_(nav,S.params,false);
+            } else scheduleCertificateRefresh_(nav,editing()?data:latest,15000);
+          } catch(error) {
+            if(!current() || error.stale) return;
+            if(/AUTH_/.test(String(error.message))) handleError(error);
+            else scheduleCertificateRefresh_(nav,data,30000);
+          }
+        },delay);
+      }
       async function renderCertificates(nav, params, force) {
         const data = await viewResource_(
           "getCertificatesOverview",
@@ -3708,11 +3813,11 @@
         content(
           pageHead(
             "Sertifikat",
-            "Buat sertifikat, periksa preview, lalu publikasikan untuk peserta.",
+            "Sertifikat dari template otomatis aktif setelah PDF selesai dibuat.",
             button("Import sertifikat", "import-certificates") +
               button("Status import", "certificate-import-status"),
           ) +
-            '<div class="notice">Pembuatan sertifikat berjalan terpisah dari aktivitas peserta. Gunakan Muat ulang untuk melihat status terbaru.</div><div class="filters"><input id="certSearch" aria-label="Cari sertifikat" placeholder="Cari peserta…" value="' +
+            '<div class="notice">PDF dibuat di latar belakang dan status diperbarui otomatis selama halaman ini terbuka. Setelah selesai, peserta langsung mendapat akses tanpa persetujuan tambahan.</div><div class="filters"><input id="certSearch" aria-label="Cari sertifikat" placeholder="Cari peserta…" value="' +
             esc(certPage.search) +
             '"></div>' +
             table(
@@ -3739,8 +3844,8 @@
                     badge(r.finalStatus) +
                     "</td><td>" +
                     (r.fileUrl
-                      ? link(r.fileUrl, "Preview sertifikat")
-                      : badge(r.jobStatus || "Belum dibuat")) +
+                      ? link(r.fileUrl, "Buka sertifikat")
+                      : badge(({QUEUED:"Antre pembuatan",PROCESSING:"Membuat PDF",FAILED:"Gagal dibuat",CANCELLED:"Dibatalkan"})[r.jobStatus] || r.jobStatus || "Belum dibuat")) +
                     (r.jobError
                       ? '<span class="muted wrap">' +
                         esc(r.jobError) +
@@ -3782,6 +3887,7 @@
             navigate("certificates");
           }, 350);
         });
+        scheduleCertificateRefresh_(nav,data);
       }
       function certificateEditor(r) {
         if (!r) return;
@@ -3799,7 +3905,7 @@
             field(
               "Tanggal terbit",
               "issueDate",
-              r.issueDate ||
+              r.issueDateInvalid ? "" : r.issueDate ||
                 new Date().toLocaleDateString("en-CA", {
                   timeZone: "Asia/Jakarta",
                 }),
@@ -3817,7 +3923,7 @@
               r.fileUrl || "",
               "url",
             ) +
-            '</div><p class="muted">Kosongkan link untuk membuat sertifikat dari template. Sertifikat baru perlu dipublikasikan setelah diperiksa.</p><label class="field-check"><input name="regenerate" type="checkbox">Buat ulang file dari template</label>' +
+            '</div>' + (r.issueDateInvalid ? '<p class="notice">Tanggal tersimpan tidak valid. Pilih kembali tanggal terbit sebelum menyimpan.</p>' : '') + '<p class="muted">Kosongkan link untuk membuat sertifikat dari template. Perubahan nama, tanggal, atau nomor pada sertifikat buatan sistem akan membuat ulang PDF secara otomatis. PDF otomatis aktif setelah selesai dibuat.</p><label class="field-check"><input name="regenerate" type="checkbox">Buat ulang file dari template</label>' +
             formActions("Simpan / Buat Sertifikat") +
             "</form>",
         );
@@ -4014,7 +4120,7 @@
         if (options.programs[params.program]) moduleLinkState.program = params.program;
         if (["PHASE 1","PHASE 2","PHASE 3"].includes(params.phase)) moduleLinkState.phase = params.phase;
         content(pageHead("Modul QLEAP", "Atur link sekali per kompetensi. Peserta yang remedial mendapat link pada detail nilainya.") +
-          '<section class="card"><div class="grid">' + select("Program","moduleProgram",["ASHDP","TSHDP"],moduleLinkState.program) + select("Phase","modulePhase",["PHASE 1","PHASE 2","PHASE 3"],moduleLinkState.phase) +
+          '<section class="card"><div class="grid">' + select("Program","moduleProgram",segmentPrograms_(),moduleLinkState.program) + select("Phase","modulePhase",["PHASE 1","PHASE 2","PHASE 3"],moduleLinkState.phase) +
           '</div><p id="modulePhaseHint" class="muted"></p><form id="moduleLinksForm"><div id="moduleLinksRows"></div>' + formActions("Simpan link modul") + '</form></section>');
         function draw() {
           const p = $("f_moduleProgram").value, ph = $("f_modulePhase").value, key = p + "|" + ph;
@@ -4253,6 +4359,7 @@
         }
       }
       const renderers = {
+        segments: renderSegments_,
         overview: renderOverview,
         programprogress: renderProgramProgress,
         progress: renderProgress,
@@ -4273,7 +4380,7 @@
 
       const legacyMigrationState = {epoch:-1,preview:null,job:null,running:false};
       async function legacyMigrationModal() {
-        const serial=modal('Tarik Data Lama','ASHDP dan TSHDP',loading()),epoch=S.epoch;
+        const serial=modal('Tarik Data Lama',S.segment+' · '+segmentPrograms_().join(' dan '),loading()),epoch=S.epoch;
         try{
           const options=await resource('getLegacyMigrationOptions',[],120000);
           if(serial!==S.modal||epoch!==S.epoch)return;
@@ -4344,7 +4451,7 @@
         if(rawImportState.epoch!==epoch)Object.assign(rawImportState,{epoch,options:null,preview:null,job:null,selected:null,running:false});
         rawImportState.running=true;dashboardSheetSync_.progress=null;
         dashboardSheetSync_.modal=modal('Sinkron Nilai','Sheet database → Dashboard','<div id="dashboardSheetSyncProgress" aria-live="polite">'+loading()+'</div>');
-        const token=S.token,scope={program:listState.program||'',region:listState.region||'',batch:listState.batch||'',ids:[...S.selected]};
+        const token=S.token,scope={program:listState.program||'',region:listState.region||'',batch:listState.batch||'',track:listState.track||'',ids:[...S.selected]};
         try{
           const plan=await rpc('getDashboardScoreSyncPlan',token,scope);if(epoch!==S.epoch)return;
           const p=dashboardSheetSync_.progress={cursor:0,total:plan.total,written:0,skipped:0,failed:0,errors:[]};drawDashboardSheetSync_();
@@ -4438,7 +4545,7 @@
         oneClickSync_.running=true;oneClickSync_.epoch=epoch;rawImportState.running=legacyMigrationState.running=true;oneClickSync_.run=null;showOneClick_();
         const token=S.token;
         try{
-          const plan=await rpc('getLegacySyncPlan',token,program);oneClickAlive_(epoch);oneClickSync_.key='ldp_legacy_sync_'+plan.owner+'_'+plan.program;
+          const plan=await rpc('getLegacySyncPlan',token,program);oneClickAlive_(epoch);oneClickSync_.key='ldp_legacy_sync_'+S.segment+'_'+plan.owner+'_'+plan.program;
           let previous=null;try{previous=JSON.parse(localStorage.getItem(oneClickSync_.key)||'null');}catch(error){}
           if(!previous)previous=inMemoryRun;
           const reusable=previous&&previous.owner===plan.owner&&previous.planKey===plan.key&&['RUNNING','PAUSED'].includes(previous.status)&&previous.steps?.length===plan.steps.length&&previous.steps.every((x,i)=>x.id===plan.steps[i].id);
@@ -4522,6 +4629,7 @@
       };
       function rawScope() {
         return {
+          segment: S.segment,
           kind: $("f_rawKind").value,
           program: $("f_rawProgram").value,
           batch: $("f_rawBatch").value,
@@ -5202,6 +5310,7 @@
       }
 
       const actions = {
+        "select-segment": (el) => switchSegment_(el.dataset.segment),
         "retry-dashboard": () => {dashboardWork.error="";return startDashboardHydration_(true);},
         "progress-status": (el) => filterProgress_(el.dataset.program,el.dataset.status),
         "progress-page": (el) => filterProgress_(el.dataset.program,undefined,el.dataset.page),
@@ -5236,7 +5345,7 @@
         navigate: (el) => navigate(el.dataset.view),
         "program-filter": (el) => {
           S.selected.clear();
-          Object.assign(listState, {page:1, program:el.dataset.program, region:el.dataset.region || "", search:"", batch:"", status:"", phase:""});
+          Object.assign(listState, {page:1, program:el.dataset.program, region:el.dataset.region || "", search:"", batch:"", status:el.dataset.status || "", phase:"", track:el.dataset.track || ""});
           return navigate("database", { program: el.dataset.program });
         },
         detail: (el) => navigate("detail", { nik: el.dataset.nik }),
@@ -5491,8 +5600,9 @@
             S.selected.clear();
             S.queue.splice(0).forEach((job) => job.reject(staleError()));
             closeModal();
+            S.segment="ALL";
             await loadDashboard(true);
-            navigate("overview");
+            navigate("segments");
           });
         },
       };
@@ -5583,7 +5693,7 @@
             content(loading());
             if(result.dashboard) applyDashboard_(result.dashboard);
             else await loadDashboard(true);
-            await navigate("overview");
+            await navigate(result.dashboard?.segment==="ALL" ? "segments" : "overview");
             if (result.passwordCreated) toast("Password Admin tersimpan. Gunakan password ini untuk login berikutnya.");
           } catch (e) {
             if (S.token) {

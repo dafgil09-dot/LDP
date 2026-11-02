@@ -1,24 +1,48 @@
-name: Audit Performa dan Kode
-
+name: Audit LDP - source validation and SonarCloud report
 on:
   push:
-    branches:
-      - main
+    branches: [main, codex/sonar-audit-2-9-0]
   pull_request:
-    types: [opened, synchronize, reopened]
-
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+permissions:
+  contents: read
+  checks: read
+concurrency:
+  group: ldp-audit-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 jobs:
-  sonarcloud:
-    name: Scan SonarCloud
+  audit:
+    name: Verify latest sources and collect SonarCloud audit
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - name: Checkout source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-
-      - name: SonarQube Cloud Scan
-        uses: SonarSource/sonarqube-scan-action@v3
+          persist-credentials: false
+      - name: Verify source syntax and analyzer mirrors
+        run: node scripts/prepare-sonar.cjs --check
+      - name: Verify audit scope and stale-result guards
+        run: node scripts/audit-checks.test.cjs
+      - name: Inspect performance-sensitive source paths
+        run: node scripts/source-audit.cjs
+      - name: Collect SonarCloud automatic analysis
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
+          GH_TOKEN: ${{ github.token }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
+          SONAR_PROJECT_KEY: dafgil09-dot_LDP
+          AUDIT_PR: ${{ github.event.pull_request.number }}
+          AUDIT_BRANCH: ${{ github.head_ref || github.ref_name }}
+          AUDIT_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/sonar-report.cjs
+      - name: Save audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ldp-audit-${{ github.run_id }}
+          path: audit-results/
+          if-no-files-found: error
+          retention-days: 14
