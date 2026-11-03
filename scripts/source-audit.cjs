@@ -1,0 +1,16 @@
+const fs=require('node:fs'),backend=fs.readFileSync('Code.gs','utf8'),html=fs.readFileSync('Index.html','utf8');
+function line(text){const at=backend.indexOf(text);if(at<0)throw Error('Audit anchor missing: '+text);return backend.slice(0,at).split('\n').length;}
+const items=[
+{id:'PERF-01',severity:'HIGH',file:'Code.gs',line:line('function login_(payload)'),evidence:'Participant login calls readAllAsObjects_(SHEET_PARTICIPANTS) just to check NIK membership.',impact:'A cache miss can load the entire Participants table before the segment chooser.',recommendation:'Use a compact membership index; preserve current-row account revocation checks.'},
+{id:'PERF-02',severity:'HIGH',file:'Code.gs',line:line('function getParticipantFullDetail_'),evidence:'Full participant detail enables liveAssessmentReads without assessmentTargetNik; programDashboard_ then reads all three phase sources.',impact:'Opening detail can read full assessment sheets even though individual competency popups have a targeted scanner.',recommendation:'Return stored summaries first and load competency detail on demand by exact enrollment identity.'},
+{id:'PERF-03',severity:'MEDIUM',file:'Code.gs',line:line('function targetedAssessmentGrid_'),evidence:'Targeted scanner reads the full NIK column, then up to 12 matching rows individually.',impact:'Fresh competency views still perform a NIK scan and multiple service round trips.',recommendation:'Cache row indexes by source revision; revalidate identity and duplicate guards.'},
+{id:'PERF-04',severity:'HIGH',file:'Code.gs',line:line('function readAllAsObjects_'),evidence:'Cache misses can independently rebuild the same read snapshot in concurrent executions.',impact:'A login burst after cache expiration can duplicate Sheets reads. Actual latency remains unmeasured.',recommendation:'Coordinate cache rebuilding without making cached reads wait behind import/certificate writers.'},
+{id:'PERF-05',severity:'MEDIUM',file:'Code.gs',line:line('function assessmentTable_'),evidence:'Assessment and personal dashboard keys still depend on global revision_, which changes for unrelated writes.',impact:'Queue or audit writes can invalidate assessment/personal caches unnecessarily.',recommendation:'Use table dependency revisions consistently; preserve invalidation after direct edits and imports.'}
+];
+fs.mkdirSync('audit-results',{recursive:true});
+const report={kind:'Source review, separate from SonarCloud rule findings',runtimeMeasured:false,sourceBytes:{'Code.gs':Buffer.byteLength(backend),'Index.html':Buffer.byteLength(html)},items};
+fs.writeFileSync('audit-results/source-performance.json',JSON.stringify(report,null,2));
+const md='# Review jalur performa LDP 2.9.0\n\nPemeriksaan source; bukan temuan rule SonarCloud. Durasi Google Sheets dan 200 pengguna bersamaan belum diukur.\n\n'+items.map(x=>'## '+x.id+' / '+x.severity+'\n\n'+x.file+':'+x.line+'\n\n'+x.evidence+'\n\n'+x.impact+'\n\nRekomendasi: '+x.recommendation+'\n').join('\n');
+fs.writeFileSync('audit-results/source-performance.md',md);
+if(process.env.GITHUB_STEP_SUMMARY)fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,md);
+console.log(JSON.stringify({sourceChecks:items.length,runtimeMeasured:false,bytes:report.sourceBytes}));

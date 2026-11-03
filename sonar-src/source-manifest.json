@@ -1,0 +1,18 @@
+{
+  "version": "2.9.1",
+  "sources": [
+    {
+      "source": "Code.gs",
+      "analyzerFile": "sonar-src/Code.js",
+      "sha256": "e32d815baca069661c022dffa01a88781e3e3ec146f486d5778ba5612a105240",
+      "mapping": "Identical content and line numbers"
+    },
+    {
+      "source": "Index.html",
+      "analyzerFile": "sonar-src/Index.js",
+      "sha256": "e615b33d4a283c8b7d88bdedbe53802de29d47cf01310cb188b20c6b2035aee8",
+      "analyzerSha256": "078f4dbdb63b10bcf9ed0a7768113822ef83c88df7ebef60b6aabc5c8877c701",
+      "mapping": "Inline application JS; original HTML line numbers preserved"
+    }
+  ]
+}
