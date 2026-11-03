@@ -1096,7 +1096,7 @@ function formatQleapDate_(v) {
 // ---------------------------------------------------------------------------
 // Repository and request lifecycle. Login bootstrapping syncs trusted User Import only.
 // ---------------------------------------------------------------------------
-var LDP_VERSION_ = "2.9.0";
+var LDP_VERSION_ = "2.9.1";
 var LDP_SCHEMA_ = "3";
 var SHEET_JOBS_ = "Certificate Jobs";
 var CTX_ = null;
@@ -1478,7 +1478,7 @@ function invalidateSheet_(name) {
   c.dirty[name] = true;
   (c.revisionDirty || (c.revisionDirty = {}))[name] = true;
   c.revisionFlushed = false;
-  delete c.memo["projected:" + name];
+  Object.keys(c.memo).forEach(function(k) { if(k.indexOf("projected:" + name + "|") === 0) delete c.memo[k]; });
   if (name === SHEET_SETTINGS) {
     c.memo = {};
     return;
@@ -1486,7 +1486,7 @@ function invalidateSheet_(name) {
   if (name === SHEET_ENROLLMENTS) { delete c.memo.enrollments; delete c.memo.enrollmentsLight; }
   if (name === SHEET_USERS) delete c.memo.userRows;
   if (name === SHEET_SUBMISSIONS || name === SHEET_MENTORING)
-    delete c.memo.workspaceIndex;
+    { delete c.memo.workspaceIndex; delete c.memo.workspaceIndexLight; }
   if (name === SHEET_CERTIFICATES) delete c.memo.certIndex;
   if (name === SHEET_QPT_LATEST_ || name === SHEET_QLEAP_POSTTEST)
     delete c.memo.latestQpt;
@@ -1934,7 +1934,7 @@ function login_(payload) {
   }
   if (
     role === ROLE_PARTICIPANT &&
-    !readAllAsObjects_(SHEET_PARTICIPANTS).some(function (r) {
+    !readSummaryRows_(SHEET_PARTICIPANTS, ["NIK","Segment","Segmen"], 0).some(function (r) {
       return normalizeNik_(r.data.NIK) === nik;
     })
   )
@@ -2022,9 +2022,9 @@ var PARTICIPANT_LIST_FIELDS_ = ["Segment","NIK","Name","JobTitle","Region","City
   "CLP_NIK","UpdatedAt","Location","CityName","CurrentPhase","CurrentEnrollmentId","ProgramTrack"];
 var ENROLLMENT_LIST_FIELDS_ = ["Segment","EnrollmentID","NIK","Program","Batch","Region","CurrentPhase",
   "EnrollmentStatus","ProgramStatus","Phase1Score","Phase2Score","Phase3Score","FinalScore","UpdatedAt","RecordVersion"];
-function readSummaryRows_(name, fields) {
+function readSummaryRows_(name, fields, maxGap) {
   if (name === SHEET_USERS) throw new Error("Data akun tidak boleh disimpan dalam cache ringkasan.");
-  var c = context_(), memo = "projected:" + name;
+  var c = context_(), memo = "projected:" + name + "|" + JSON.stringify(fields);
   if (c.memo[memo]) return segmentRows_(name,c.memo[memo]);
   function project(rows) { return rows.map(function (row) {
     var data = {}; fields.forEach(function (field) { data[field] = row.data[field] === undefined ? "" : row.data[field]; });
@@ -2046,6 +2046,7 @@ function readSummaryRows_(name, fields) {
   // Header order may vary, so no data column positions are hard-coded.
   columns.forEach(function (col) {
     var previous = groups[groups.length-1], split = !previous;
+    if (previous && maxGap !== undefined && col - previous.end - 1 > maxGap) split = true;
     if (previous && last > 500) for (var i=previous.end+1;i<col;i++)
       if (/summary|snapshot|notes|feedback|answersjson|detailsjson|actionplan|implementation|projecttitle|theme/i.test(headers[i])) { split=true;break; }
     if (split) groups.push({start:col,end:col}); else previous.end=col;
@@ -2202,24 +2203,24 @@ function legacyRecordScope_(record, p, light) {
   var list = (enrollmentIndex_(light).byNik[normalizeNik_(p.NIK)] || []).filter(function(r){return normalizeSegment_(r.data.Segment)===normalizeSegment_(p.Segment);});
   return list.length === 1;
 }
-function workspaceIndex_() {
-  var c = context_();
-  if (!c.memo.workspaceIndex) {
+function workspaceIndex_(light) {
+  var c = context_(), memo = light ? "workspaceIndexLight" : "workspaceIndex";
+  if (!c.memo[memo]) {
     var index = { subs: {}, evidence: {} };
-    readAllAsObjects_(SHEET_SUBMISSIONS).forEach(function (r) {
+    (light ? readSummaryRows_(SHEET_SUBMISSIONS,["NIK","EnrollmentID","Phase","Segment","Segmen"]) : readAllAsObjects_(SHEET_SUBMISSIONS)).forEach(function (r) {
       var n = normalizeNik_(r.data.NIK);
       (index.subs[n] || (index.subs[n] = [])).push(r.data);
     });
-    readAllAsObjects_(SHEET_MENTORING).forEach(function (r) {
+    (light ? readSummaryRows_(SHEET_MENTORING,["NIK","EnrollmentID","MentorRole","FileUrl","DriveFileId","Segment","Segmen"]) : readAllAsObjects_(SHEET_MENTORING)).forEach(function (r) {
       var n = normalizeNik_(r.data.NIK);
       (index.evidence[n] || (index.evidence[n] = [])).push(r.data);
     });
-    c.memo.workspaceIndex = index;
+    c.memo[memo] = index;
   }
-  return c.memo.workspaceIndex;
+  return c.memo[memo];
 }
 function overviewPanelEligible_(p) {
-  var index=workspaceIndex_(),n=normalizeNik_(p.NIK),phases={},mentors={};
+  var index=workspaceIndex_(true),n=normalizeNik_(p.NIK),phases={},mentors={};
   (index.subs[n] || []).some(function(d) {
     if(legacyRecordScope_(d,p,true)) phases[String(d.Phase).toUpperCase()]=true;
     return phases.PROPOSAL && phases.PROGRESS && phases.FINAL;
@@ -2469,9 +2470,9 @@ function programStats_(participants) {
       var key = entityKey_(p.NIK, p.Program, p.Batch, p.Segment);
       if (unique[key]) throw new Error("Data peserta duplikat " + key);
       unique[key] = true;
-      var row = participantRow_(p,{light:true}),
-        status = row.participantStatus,
-        result = row.result;
+      var er = enrollmentFor_(p,true),
+        status = normalizeParticipantStatus_(p.ParticipantStatus),
+        result = computeResult_({ProgramStatus:er ? er.data.ProgramStatus : "", ParticipantStatus:p.ParticipantStatus});
       g.total++;
       var track=normalizeProgramTrack_(p.ProgramTrack);
       if(track === "TALENT" || track === "BOTH") g.talentPool++;
@@ -2747,7 +2748,7 @@ function getParticipantPage_(token, f) {
           (!f.batch || sameBatch_(p.Batch,f.batch)) &&
           matchesProgramTrack_(p.ProgramTrack,f.track) &&
           (!f.status || normalizeParticipantStatus_(p.ParticipantStatus) === f.status) &&
-          (!f.phase || normalizeCurrentPhase_((enrollmentFor_(p) || {data:{}}).data.CurrentPhase || p.CurrentPhase || inferCurrentPhase_(p)) === f.phase);
+          (!f.phase || normalizeCurrentPhase_((enrollmentFor_(p, f.light === true) || {data:{}}).data.CurrentPhase || p.CurrentPhase || inferCurrentPhase_(p)) === f.phase);
       });
   rows.sort(function (a, b) {
     return String(a.data.Name).localeCompare(String(b.data.Name));
@@ -2781,6 +2782,7 @@ function getParticipantFullDetail_(token, nik) {
     return normalizeNik_(r.data.NIK) === normalizeNik_(nik);
   });
   context_().memo.liveAssessmentReads = true;
+  context_().memo.assessmentTargetNik = normalizeNik_(nik);
   var p = rows[0].data;
   return {
     participant: {
@@ -2874,7 +2876,7 @@ function assessmentTable_(program, phase) {
     if((other.segment || "B2B")!==(cfg.segment || "B2B") && String(getSetting_(other.settingKey)||other.defaultSheet).toLowerCase()===String(name).toLowerCase())
       throw new Error("Sheet nilai B2B dan B2C harus terpisah. Periksa pengaturan sumber " + name + ".");
   });
-  var sh = getSheet_(name), key = cacheKey_("ldpa:", LDP_VERSION_ + "|" + name + "|" + revision_()),
+  var sh = getSheet_(name), key = cacheKey_("ldpa:", sourceRevision_([name, SHEET_SETTINGS])),
     grid = !c.memo.liveAssessmentReads && !c.dirty[name] && !c.bulk ? readSnapshot_(key) : null,
     last,cols;
   if(c.memo.liveAssessmentReads && c.memo.assessmentTargetNik) {
@@ -3046,7 +3048,7 @@ function readPhase3Assessment_(nik, program, batch) {
     var sh = getSheet_(name),
       n = sh.getLastRow(),
       m = sh.getLastColumn(),
-      key = cacheKey_("ldpp3:", revision_());
+      key = cacheKey_("ldpp3:", sourceRevision_([name, SHEET_SETTINGS]));
     var grid = c.bulk && c.tables[name] ? [getHeaders_(sh)].concat(c.tables[name].map(function(r){return getHeaders_(sh).map(function(h){return r.data[h]===undefined?"":r.data[h];});})) : (!c.memo.liveAssessmentReads && !c.bulk && !c.dirty[name] ? readSnapshot_(key) : null);
     if (!grid) {
       grid = n && m ? sh.getRange(1, 1, n, m).getDisplayValues() : [];
@@ -3079,7 +3081,7 @@ function readPhase3Assessment_(nik, program, batch) {
     values.slice(1).forEach(function (r) {
       if (
         normalizeNik_(r[ni]) !== target ||
-        entityKey_(target, r[pi], r[bi], si>=0?r[si]:"B2B") !== entityKey_(target, program, batch)
+        entityKey_(target, r[pi], r[bi], normalizeSegment_(si>=0?r[si]:"")) !== entityKey_(target, program, batch)
       )
         return;
       var time = ts >= 0 ? timeValue_(r[ts]) : 0;
